@@ -30,10 +30,13 @@ import {
   Layers
 } from 'lucide-react';
 import JSZip from 'jszip';
-import saveAs from 'file-saver';
+import * as FileSaver from 'file-saver';
 import { generateBookPlan, generateColoringPage, generateCoverImage, getClosestAspectRatio } from './services/gemini';
 import { generatePDF } from './services/pdfGenerator';
 import { BookPlan, GenerationState, PageDefinition, ViewType } from './types';
+
+// Safely handle file-saver exports for different environment types
+const saveAs = FileSaver.saveAs || (FileSaver.default ? (FileSaver.default.saveAs || FileSaver.default) : FileSaver);
 
 const INITIAL_STATE: GenerationState = {
   view: 'home',
@@ -67,24 +70,25 @@ export default function App() {
   }, [state.step, state.view]);
 
   const handleError = (err: any) => {
-    console.error("API Error:", err);
+    console.error("Studio Logic Error:", err);
     let message = "An unexpected error occurred.";
     let isQuota = false;
 
     try {
-      const errStr = typeof err === 'string' ? err : JSON.stringify(err);
+      const errStr = typeof err === 'string' ? err : (err.message || JSON.stringify(err));
       if (errStr.includes("RESOURCE_EXHAUSTED") || errStr.includes("429") || errStr.includes("quota")) {
         message = "Daily Generation Limit Reached. Please wait a moment or upgrade to VIP.";
         isQuota = true;
-      } else if (err.message) {
-        message = err.message;
+      } else {
+        message = errStr;
       }
     } catch (e) {
-      message = err?.message || "Connection lost. Please check your internet.";
+      message = "Connection error. Please check your internet and API status.";
     }
 
     setError({ message, isQuota });
     setLoading(false);
+    isGeneratingImagesRef.current = false;
   };
 
   const navigate = (view: ViewType) => {
@@ -104,9 +108,11 @@ export default function App() {
     setError(null);
 
     try {
+      console.log("Generating book plan for topic:", state.topic);
       const plan: BookPlan = await generateBookPlan(state.topic);
+      
       if (!plan.pages || plan.pages.length === 0) {
-        throw new Error("Failed to generate a book plan. Please try a different topic.");
+        throw new Error("AI failed to draft pages. Please try a more specific topic.");
       }
       
       const initialPages: PageDefinition[] = plan.pages.map((page, index) => ({
@@ -130,38 +136,43 @@ export default function App() {
   };
 
   const startImageGeneration = async () => {
-    setState(prev => {
-      const updatedState = { ...prev, step: 'generating' };
-      isGeneratingImagesRef.current = true;
-      setProgress(0);
-      processQueue(updatedState);
-      return updatedState;
-    });
+    console.log("Starting bulk image generation...");
+    isGeneratingImagesRef.current = true;
+    setProgress(0);
+    
+    // Capture the state before transition to avoid using old values in the queue
+    const targetState = { ...state, step: 'generating' as const };
+    setState(targetState);
+    
+    // Run queue logic outside of the setState cycle to prevent infinite loops/stalls
+    processQueue(targetState);
   };
 
   const processQueue = async (initialState: GenerationState) => {
-    const BATCH_SIZE = 4;
+    const BATCH_SIZE = 2; // Reduced concurrency to increase reliability for free-tier users
     const aspectRatio = getClosestAspectRatio(initialState.dimensions.width, initialState.dimensions.height);
 
-    // Cover starts immediately in background
+    console.log("Starting cover generation...");
     const coverPromise = generateCoverImage(initialState.topic, initialState.metadata?.title || "Coloring Ebook", aspectRatio)
         .then(cover => {
+            console.log("Cover image generated successfully.");
             setState(prev => ({ ...prev, coverImage: cover }));
         })
-        .catch(e => console.error("Cover failed", e));
+        .catch(e => {
+            console.warn("Cover image failed, but continuing with interior...", e);
+        });
 
     let pagesToProcess = [...initialState.pages];
 
     while (pagesToProcess.some(p => p.status === 'pending') && isGeneratingImagesRef.current) {
         const batch = pagesToProcess.filter(p => p.status === 'pending').slice(0, BATCH_SIZE);
+        console.log(`Processing batch of ${batch.length} pages...`);
         
-        // Mark current batch as generating
         setState(prev => ({
             ...prev,
             pages: prev.pages.map(p => batch.find(b => b.id === p.id) ? { ...p, status: 'generating' } : p)
         }));
         
-        // Update local tracker
         batch.forEach(b => {
             const idx = pagesToProcess.findIndex(p => p.id === b.id);
             if (idx !== -1) pagesToProcess[idx].status = 'generating';
@@ -169,16 +180,21 @@ export default function App() {
 
         await Promise.all(batch.map(async (page) => {
             try {
+                console.log(`Generating interior for: ${page.title}`);
                 const base64Image = await generateColoringPage(page.prompt, aspectRatio);
+                
                 setState(prev => ({
                     ...prev,
                     pages: prev.pages.map(p => p.id === page.id ? { ...p, status: 'completed', imageUrl: base64Image } : p)
                 }));
+                
                 const idx = pagesToProcess.findIndex(p => p.id === page.id);
                 if (idx !== -1) pagesToProcess[idx].status = 'completed';
+                console.log(`Completed interior for: ${page.title}`);
             } catch (err) {
-                console.error("Page failed", err);
+                console.error(`Page failed: ${page.title}`, err);
                 setState(prev => ({ ...prev, pages: prev.pages.map(p => p.id === page.id ? { ...p, status: 'failed' } : p) }));
+                
                 const idx = pagesToProcess.findIndex(p => p.id === page.id);
                 if (idx !== -1) pagesToProcess[idx].status = 'failed';
 
@@ -192,9 +208,13 @@ export default function App() {
         setState(prev => {
             const total = prev.pages.length;
             const done = prev.pages.filter(p => p.status === 'completed' || p.status === 'failed').length;
-            setProgress(Math.round((done / total) * 100));
+            const newProgress = Math.round((done / total) * 100);
+            setProgress(newProgress);
             return prev;
         });
+
+        // Small delay to prevent immediate subsequent request bursts
+        await new Promise(r => setTimeout(r, 1500));
     }
     
     await coverPromise;
@@ -202,7 +222,10 @@ export default function App() {
     isGeneratingImagesRef.current = false;
     setState(prev => {
         const allDone = prev.pages.every(p => p.status === 'completed' || p.status === 'failed');
-        if (allDone && prev.step === 'generating') return { ...prev, step: 'review' };
+        if (allDone && prev.step === 'generating') {
+            console.log("All tasks finished. Moving to review.");
+            return { ...prev, step: 'review' };
+        }
         return prev;
     });
   };
@@ -369,14 +392,14 @@ export default function App() {
                    <div className="max-w-4xl mx-auto text-center mt-20 animate-in fade-in duration-500">
                        <Loader2 className="h-24 w-24 text-jocker-600 animate-spin mx-auto mb-10" />
                        <h2 className="text-4xl font-black mb-4 tracking-tighter dark:text-white">Rendering High-Reach Assets...</h2>
-                       <p className="text-zinc-500 mb-2 text-lg font-medium">Bulk mode active: Processing pages concurrently for maximum speed.</p>
+                       <p className="text-zinc-500 mb-2 text-lg font-medium">Processing pages. This may take a few minutes for 20 unique designs.</p>
                        <p className="text-xs text-jocker-400 font-bold uppercase tracking-widest mb-10">Current Progress: {progress}% Complete</p>
                        <div className="w-full bg-zinc-200 dark:bg-zinc-800 rounded-full h-8 mb-4 overflow-hidden shadow-inner p-1">
                             <div className="bg-gradient-to-r from-jocker-600 to-indigo-500 h-6 rounded-full transition-all duration-700" style={{ width: `${progress}%` }}></div>
                        </div>
                        <div className="mt-20 grid grid-cols-2 sm:grid-cols-4 md:grid-cols-5 gap-6">
                            {state.pages.map((p, i) => (
-                             <div key={p.id} className="aspect-[1/1.41] bg-white dark:bg-zinc-900 rounded-2xl border-2 border-zinc-100 dark:border-zinc-800 flex flex-col items-center justify-center relative overflow-hidden shadow-md">
+                             <div key={p.id} className="aspect-[1/1.41] bg-white dark:bg-zinc-900 rounded-2xl border-2 border-zinc-100 dark:border-zinc-800 flex flex-col items-center justify-center relative overflow-hidden shadow-md transition-all">
                                 {p.status === 'completed' && p.imageUrl ? (
                                     <img src={p.imageUrl} className="w-full h-full object-contain p-3 animate-in zoom-in-95 duration-500" alt="Interior" />
                                 ) : (
@@ -385,7 +408,7 @@ export default function App() {
                                         <span className="text-[8px] font-black text-zinc-400 uppercase tracking-widest">{p.status === 'generating' ? 'Rendering' : (p.status === 'failed' ? 'Failed' : 'Queued')}</span>
                                     </div>
                                 )}
-                                <div className="absolute bottom-2 right-2 bg-black/60 text-white text-[8px] font-black px-2 py-0.5 rounded-full">P{i+1}</div>
+                                <div className={`absolute bottom-2 right-2 text-white text-[8px] font-black px-2 py-0.5 rounded-full ${p.status === 'completed' ? 'bg-green-600' : 'bg-black/60'}`}>P{i+1}</div>
                              </div>
                            ))}
                        </div>

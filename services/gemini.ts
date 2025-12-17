@@ -2,11 +2,10 @@
 import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
 import { BookPlan } from "../types";
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
 const TEXT_MODEL = 'gemini-3-flash-preview';
 const IMAGE_MODEL = 'gemini-2.5-flash-image'; 
 
-async function withRetry<T>(operation: () => Promise<T>, maxRetries = 12, initialDelay = 1000): Promise<T> {
+async function withRetry<T>(operation: () => Promise<T>, maxRetries = 6, initialDelay = 2000): Promise<T> {
   let lastError: any;
   for (let i = 0; i < maxRetries; i++) {
     try {
@@ -21,18 +20,20 @@ async function withRetry<T>(operation: () => Promise<T>, maxRetries = 12, initia
 
       if (isRateLimited || isOverloaded) {
         if (i < maxRetries - 1) {
-            // Aggressive initial retry, then exponential
-            const multiplier = isRateLimited ? 2 : 1.5;
-            const delay = Math.max(500, (initialDelay * Math.pow(multiplier, i)) + (Math.random() * 500));
+            const delay = Math.max(1000, (initialDelay * Math.pow(2, i)) + (Math.random() * 500));
+            console.warn(`API Rate limit or overload. Retrying in ${Math.round(delay)}ms... (Attempt ${i + 1}/${maxRetries})`);
             await new Promise(resolve => setTimeout(resolve, delay));
             continue;
         }
       }
+      console.error("API Permanent Error:", errorMessage);
       throw error;
     }
   }
   throw lastError;
 }
+
+const getAI = () => new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 export const generateBookPlan = async (topic: string): Promise<BookPlan> => {
   const prompt = `
@@ -40,15 +41,16 @@ export const generateBookPlan = async (topic: string): Promise<BookPlan> => {
     The target is "High Reach SEO" for Kindle/KDP.
     
     Requirements:
-    - GENERATE EXACTLY 20 PAGES in the pages array.
+    - GENERATE EXACTLY 20 UNIQUE PAGES in the pages array.
     - Title should be keyword rich (e.g. "Space Cats Coloring Book for Kids Ages 4-8").
-    - Subtitle should highlight benefits (e.g. "50 Unique Hand-Drawn Pages to Boost Creativity and Fine Motor Skills").
+    - Subtitle should highlight benefits (e.g. "Unique Hand-Drawn Pages to Boost Creativity").
     - Backend keywords must be high-traffic, competitive-niche phrases.
     - Pages must be fun, simple enough for kids to color, but interesting enough for parents to buy.
     
     Return JSON exactly matching the schema.
   `;
 
+  const ai = getAI();
   const response = await withRetry<GenerateContentResponse>(() => ai.models.generateContent({
     model: TEXT_MODEL,
     contents: prompt,
@@ -101,11 +103,12 @@ export const getClosestAspectRatio = (width: number, height: number): string => 
 export const generateColoringPage = async (sceneDescription: string, aspectRatio: string = "3:4"): Promise<string> => {
   const prompt = `
     Children's coloring book page: ${sceneDescription}.
-    Style: Hand-drawn black and white line art, thick outlines, high contrast.
-    Format: White background only, NO shading, NO colors, NO grayscale, NO complex textures. 
-    Professional KDP style. Large print simple subjects.
+    Style: Professional hand-drawn black and white line art, thick outlines, high contrast.
+    Format: Pure white background ONLY, NO shading, NO colors, NO grayscale, NO textures. 
+    Large print simple subjects. KDP interior compatible.
   `;
 
+  const ai = getAI();
   const response = await withRetry<GenerateContentResponse>(() => ai.models.generateContent({
     model: IMAGE_MODEL,
     contents: prompt,
@@ -118,16 +121,17 @@ export const generateColoringPage = async (sceneDescription: string, aspectRatio
       if (part.inlineData?.data) return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
     }
   }
-  throw new Error("No image generated");
+  throw new Error("API response did not contain image data.");
 };
 
-export const generateCoverImage = async (topic: string, _title: string, aspectRatio: string = "3:4"): Promise<string> => {
+export const generateCoverImage = async (topic: string, title: string, aspectRatio: string = "3:4"): Promise<string> => {
     const prompt = `
-      Front cover illustration for a kids coloring book: "${topic}".
-      Style: Vibrant, cartoonish, 3D render style, eye-catching bright colors.
-      Inviting and professional. No text if it makes it look messy.
+      Front cover illustration for a children's coloring book about: "${topic}".
+      Style: Vibrant, cartoonish, 3D render look, eye-catching bright colors.
+      Inviting and professional. DO NOT INCLUDE TEXT on the illustration itself.
     `;
   
+    const ai = getAI();
     const response = await withRetry<GenerateContentResponse>(() => ai.models.generateContent({
       model: IMAGE_MODEL,
       contents: prompt,
@@ -140,5 +144,5 @@ export const generateCoverImage = async (topic: string, _title: string, aspectRa
         if (part.inlineData?.data) return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
       }
     }
-    throw new Error("No cover generated");
+    throw new Error("API response did not contain cover image data.");
 };
