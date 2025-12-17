@@ -1,0 +1,5 @@
+{
+  "name": "AI KDP Studio",
+  "description": "AI Book Cover & Interior Generator for Amazon Kindle KDP. Creates optimized metadata and unique coloring pages.",
+  "requestFramePermissions": []
+}
