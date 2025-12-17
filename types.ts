@@ -24,7 +24,10 @@ export interface BookDimensions {
   unit: 'in' | 'px';
 }
 
+export type ViewType = 'home' | 'login' | 'register' | 'vip' | 'canva';
+
 export interface GenerationState {
+  view: ViewType;
   step: 'input' | 'planning' | 'generating' | 'review';
   topic: string;
   dimensions: BookDimensions;
