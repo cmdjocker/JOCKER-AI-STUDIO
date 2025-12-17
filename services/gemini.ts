@@ -9,8 +9,8 @@ const TEXT_MODEL = 'gemini-2.5-flash';
 // Using general image model for speed and availability, prompting for line art
 const IMAGE_MODEL = 'gemini-2.5-flash-image'; 
 
-// Helper function to retry operations on 503 errors
-async function withRetry<T>(operation: () => Promise<T>, retries = 3, initialDelay = 2000): Promise<T> {
+// Helper function to retry operations on 503 and 429 errors
+async function withRetry<T>(operation: () => Promise<T>, retries = 5, initialDelay = 3000): Promise<T> {
   let lastError: any;
   
   for (let i = 0; i < retries; i++) {
@@ -19,23 +19,35 @@ async function withRetry<T>(operation: () => Promise<T>, retries = 3, initialDel
     } catch (error: any) {
       lastError = error;
       
-      // Check for 503 Service Unavailable or "overloaded" messages
-      const isOverloaded = 
-        error.status === 503 || 
-        error.code === 503 ||
-        (error.message && (
-          error.message.includes('503') || 
-          error.message.toLowerCase().includes('overloaded') ||
-          error.message.toLowerCase().includes('server error')
-        ));
+      const errorCode = error.status || error.code || error.error?.code;
+      const errorStatus = error.status || error.error?.status;
+      const errorMessage = (error.message || JSON.stringify(error)).toLowerCase();
 
-      if (isOverloaded && i < retries - 1) {
-        const delay = initialDelay * Math.pow(2, i);
-        console.warn(`Gemini API overloaded. Retrying in ${delay}ms... (Attempt ${i + 1}/${retries})`);
-        await new Promise(resolve => setTimeout(resolve, delay));
-        continue;
+      // Check for Rate Limit (429)
+      const isRateLimited = errorCode === 429 || errorMessage.includes('429') || errorMessage.includes('quota') || errorMessage.includes('exhausted');
+      
+      // Check for Overloaded (503)
+      const isOverloaded = 
+        errorCode === 503 || 
+        errorStatus === 'UNAVAILABLE' ||
+        errorMessage.includes('503') || 
+        errorMessage.includes('overloaded') ||
+        errorMessage.includes('unavailable') ||
+        errorMessage.includes('server error');
+
+      if (isRateLimited || isOverloaded) {
+        if (i < retries - 1) {
+            // For rate limits, we use a much longer delay
+            const multiplier = isRateLimited ? 3 : 2;
+            const delay = initialDelay * Math.pow(multiplier, i);
+            
+            console.warn(`Gemini API ${isRateLimited ? 'Rate Limited' : 'Overloaded'}. Retrying in ${delay}ms... (Attempt ${i + 1}/${retries})`);
+            await new Promise(resolve => setTimeout(resolve, delay));
+            continue;
+        }
       }
       
+      // If it's not a retryable error or we ran out of retries, throw
       throw error;
     }
   }

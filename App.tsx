@@ -103,11 +103,12 @@ export default function App() {
 
   // Process the image queue in batches to avoid rate limits
   const processQueue = async () => {
-    const BATCH_SIZE = 4;
-    const DELAY_MS = 10000; // 10 seconds delay between batches
+    // REDUCED batch size and INCREASED delay to handle 429 quota limits more gracefully
+    const BATCH_SIZE = 2; 
+    const DELAY_MS = 15000; // 15 seconds delay between batches
     const aspectRatio = getClosestAspectRatio(state.dimensions.width, state.dimensions.height);
 
-    // 1. Start Cover Generation (counts towards rate limit, so we treat it lightly here)
+    // 1. Start Cover Generation
     if (!state.coverImage) {
         generateCoverImage(state.topic, state.metadata?.title || "Coloring Ebook", aspectRatio)
            .then(cover => setState(prev => ({ ...prev, coverImage: cover })))
@@ -195,12 +196,6 @@ export default function App() {
 
   const handleDownloadPDF = () => {
       if (state.metadata) {
-          // Filter out locked pages for the PDF or include them? 
-          // Usually paid walls prevent download. Let's include only free pages for now to be safe, 
-          // or just generate what we have. The prompt said "hide" images.
-          // Let's pass all, but the locked ones won't be visible in the grid.
-          // For the PDF, if the user downloads, they might get everything if we don't block it.
-          // But purely for UI design request:
           generatePDF(state.metadata, state.pages, state.dimensions, state.coverImage);
       }
   };
@@ -225,7 +220,6 @@ export default function App() {
     state.pages.forEach((page, index) => {
       if (page.status === 'completed' && page.imageUrl) {
         const imgData = page.imageUrl.split(',')[1];
-        // Format index for sorting (01, 02, etc.)
         const fileName = `${(index + 1).toString().padStart(2, '0')}_${page.title.slice(0, 30).replace(/[^a-z0-9]/gi, '_')}.png`;
         folder.file(fileName, imgData, { base64: true });
       }
@@ -520,7 +514,7 @@ export default function App() {
                    </div>
                    
                    <h2 className="text-3xl font-black text-zinc-900 dark:text-white mb-3">Generating Masterpiece...</h2>
-                   <p className="text-zinc-500 dark:text-zinc-400 mb-10 text-lg">AI KDP Studio is crafting high-resolution vectors for you.</p>
+                   <p className="text-zinc-500 dark:text-zinc-400 mb-10 text-lg">AI KDP Studio is crafting high-resolution vectors for you. We're using a conservative pace to ensure top quality.</p>
                    
                    <div className="w-full bg-zinc-200 dark:bg-zinc-800 rounded-full h-6 mb-4 overflow-hidden shadow-inner">
                        <div 
@@ -538,7 +532,6 @@ export default function App() {
                    {/* Live Preview Grid */}
                    <div className="mt-16 grid grid-cols-2 sm:grid-cols-4 md:grid-cols-5 gap-4">
                        {state.pages.map((page, i) => {
-                           // Lock logic: Lock after 4 images
                            const isLocked = i >= 4;
                            
                            return (
@@ -550,7 +543,10 @@ export default function App() {
                                         ) : page.status === 'generating' ? (
                                             <Loader2 className="animate-spin text-jocker-400 h-8 w-8" />
                                         ) : page.status === 'failed' ? (
-                                            <span className="text-red-400 text-xs font-bold">Failed</span>
+                                            <div className="flex flex-col items-center gap-1">
+                                                <AlertCircle className="text-red-400 h-5 w-5" />
+                                                <span className="text-red-400 text-[10px] font-bold uppercase">Waiting Retry</span>
+                                            </div>
                                         ) : (
                                             <span className="text-zinc-300 dark:text-zinc-700 text-xs font-bold uppercase">Waiting</span>
                                         )}
@@ -663,7 +659,6 @@ export default function App() {
                        </div>
                        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-8">
                           {state.pages.map((page, idx) => {
-                              // Lock logic: Lock after 4 images
                               const isLocked = idx >= 4;
                               
                               return (
@@ -677,7 +672,6 @@ export default function App() {
                                                 className={`w-full h-full object-contain p-4 bg-white ${isLocked ? 'blur-md opacity-50 scale-105' : ''} transition-all`} 
                                               />
                                               
-                                              {/* Locked Overlay */}
                                               {isLocked && (
                                                   <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-black/10 backdrop-blur-[2px]">
                                                       <div className="bg-black/80 text-amber-400 p-3 rounded-full shadow-2xl mb-2">
@@ -689,7 +683,6 @@ export default function App() {
                                                   </div>
                                               )}
 
-                                              {/* Individual Download Button Overlay (Only if not locked) */}
                                               {!isLocked && (
                                                 <button 
                                                     onClick={() => handleDownloadSinglePNG(page.imageUrl!, `Page_${idx+1}.png`)}
@@ -749,7 +742,6 @@ export default function App() {
                    <p className="text-zinc-500 text-sm font-bold">© 2025 AI KDP Studio. Powered by JOCKER</p>
               </div>
               
-              {/* Payment Methods */}
               <div className="flex items-center gap-6 text-zinc-400">
                   <span className="text-[10px] uppercase font-black tracking-widest text-zinc-300">Secure Payment</span>
                   <div className="flex gap-4">
