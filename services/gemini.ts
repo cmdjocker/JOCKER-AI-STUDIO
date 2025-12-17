@@ -1,67 +1,31 @@
 import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
 import { BookPlan } from "../types";
 
-// Initialize Gemini Client
-// @ts-ignore - process.env.API_KEY is guaranteed by the runtime environment per instructions
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-
-// Per guidelines: Basic Text Tasks use gemini-3-flash-preview
 const TEXT_MODEL = 'gemini-3-flash-preview';
-// General Image Tasks use gemini-2.5-flash-image
 const IMAGE_MODEL = 'gemini-2.5-flash-image'; 
 
-/**
- * Robust retry wrapper with exponential backoff and jitter.
- * Designed to handle both 503 (Overloaded) and 429 (Rate Limit) errors.
- */
 async function withRetry<T>(operation: () => Promise<T>, maxRetries = 10, initialDelay = 4000): Promise<T> {
   let lastError: any;
-  
   for (let i = 0; i < maxRetries; i++) {
     try {
       return await operation();
     } catch (error: any) {
       lastError = error;
-      
-      // Extract error info from various possible SDK error structures
       const errorCode = error.status || error.code || error.error?.code;
-      const errorStatus = error.status || error.error?.status;
       const errorMessage = (error.message || JSON.stringify(error)).toLowerCase();
 
-      // Check for Rate Limit / Quota (429)
-      const isRateLimited = errorCode === 429 || 
-                          errorMessage.includes('429') || 
-                          errorMessage.includes('quota') || 
-                          errorMessage.includes('exhausted') ||
-                          errorMessage.includes('resource_exhausted');
-      
-      // Check for Overloaded / Unavailable (503)
-      const isOverloaded = errorCode === 503 || 
-                          errorStatus === 'UNAVAILABLE' ||
-                          errorMessage.includes('503') || 
-                          errorMessage.includes('overloaded') ||
-                          errorMessage.includes('unavailable') ||
-                          errorMessage.includes('server error');
+      const isRateLimited = errorCode === 429 || errorMessage.includes('429') || errorMessage.includes('quota');
+      const isOverloaded = errorCode === 503 || errorMessage.includes('503') || errorMessage.includes('overloaded');
 
       if (isRateLimited || isOverloaded) {
         if (i < maxRetries - 1) {
-            // Calculate delay with exponential backoff
-            // 429 gets a steeper backoff (multiplier 3) than 503 (multiplier 2)
             const multiplier = isRateLimited ? 3 : 2;
-            const baseDelay = initialDelay * Math.pow(multiplier, i);
-            
-            // Add jitter (randomness +/- 20%) to prevent synchronized retries
-            const jitter = baseDelay * 0.2 * (Math.random() * 2 - 1);
-            const finalDelay = Math.max(1000, baseDelay + jitter);
-            
-            console.warn(`Gemini API ${isRateLimited ? 'Rate Limited (429)' : 'Overloaded (503)'}. Retrying in ${Math.round(finalDelay)}ms... (Attempt ${i + 1}/${maxRetries})`);
-            
-            await new Promise(resolve => setTimeout(resolve, finalDelay));
+            const delay = Math.max(1000, (initialDelay * Math.pow(multiplier, i)) + (Math.random() * 1000));
+            await new Promise(resolve => setTimeout(resolve, delay));
             continue;
         }
       }
-      
-      // If it's a fatal error (like 400 Bad Request) or we're out of retries, throw
       throw error;
     }
   }
@@ -70,16 +34,16 @@ async function withRetry<T>(operation: () => Promise<T>, maxRetries = 10, initia
 
 export const generateBookPlan = async (topic: string): Promise<BookPlan> => {
   const prompt = `
-    You are an expert Amazon KDP publisher. Create a detailed plan for a children's coloring book about "${topic}".
+    You are a professional Amazon KDP strategist. Create a plan for a niche children's coloring book about "${topic}".
+    The target is "High Reach SEO" for Kindle/KDP.
     
-    Return a JSON object with:
-    1. A catchy, SEO-optimized Title.
-    2. A compelling Subtitle.
-    3. A persuasive Description for the Amazon product page.
-    4. 7 high-reach SEO backend keywords (phrase match).
-    5. A list of 20 distinct pages. For each page, provide:
-       - "title": A short, fun, engaging title for the page.
-       - "description": A distinct, fun, and visually descriptive scene prompt suitable for generating black and white coloring pages.
+    Requirements:
+    - Title should be keyword rich (e.g. "Space Cats Coloring Book for Kids Ages 4-8").
+    - Subtitle should highlight benefits (e.g. "50 Unique Hand-Drawn Pages to Boost Creativity and Fine Motor Skills").
+    - Backend keywords must be high-traffic, competitive-niche phrases.
+    - Pages must be fun, simple enough for kids to color, but interesting enough for parents to buy.
+    
+    Return JSON exactly matching the schema.
   `;
 
   const response = await withRetry<GenerateContentResponse>(() => ai.models.generateContent({
@@ -93,10 +57,7 @@ export const generateBookPlan = async (topic: string): Promise<BookPlan> => {
           title: { type: Type.STRING },
           subtitle: { type: Type.STRING },
           description: { type: Type.STRING },
-          keywords: { 
-            type: Type.ARRAY, 
-            items: { type: Type.STRING } 
-          },
+          keywords: { type: Type.ARRAY, items: { type: Type.STRING } },
           pages: {
             type: Type.ARRAY,
             items: { 
@@ -106,8 +67,7 @@ export const generateBookPlan = async (topic: string): Promise<BookPlan> => {
                     description: { type: Type.STRING }
                 },
                 required: ["title", "description"]
-            },
-            description: "20 distinct pages with titles and descriptions"
+            }
           }
         },
         required: ["title", "subtitle", "description", "keywords", "pages"]
@@ -115,11 +75,7 @@ export const generateBookPlan = async (topic: string): Promise<BookPlan> => {
     }
   }));
 
-  const text = response.text;
-  if (!text) throw new Error("No plan generated");
-  
-  const data = JSON.parse(text);
-  
+  const data = JSON.parse(response.text);
   return {
     metadata: {
       title: data.title,
@@ -133,79 +89,49 @@ export const generateBookPlan = async (topic: string): Promise<BookPlan> => {
 
 export const getClosestAspectRatio = (width: number, height: number): string => {
   const ratio = width / height;
-  
-  const supported = [
-    { id: "1:1", val: 1.0 },
-    { id: "3:4", val: 0.75 },
-    { id: "4:3", val: 1.333 },
-    { id: "9:16", val: 0.5625 },
-    { id: "16:9", val: 1.777 }
-  ];
-
-  const closest = supported.reduce((prev, curr) => {
-    return (Math.abs(curr.val - ratio) < Math.abs(prev.val - ratio) ? curr : prev);
-  });
-
-  return closest.id;
+  const supported = [{ id: "1:1", val: 1.0 }, { id: "3:4", val: 0.75 }, { id: "4:3", val: 1.333 }, { id: "9:16", val: 0.5625 }, { id: "16:9", val: 1.777 }];
+  return supported.reduce((prev, curr) => (Math.abs(curr.val - ratio) < Math.abs(prev.val - ratio) ? curr : prev)).id;
 };
 
 export const generateColoringPage = async (sceneDescription: string, aspectRatio: string = "3:4"): Promise<string> => {
   const prompt = `
-    Generate a professional children's coloring book page. 
-    Subject: ${sceneDescription}.
-    Style: Clean black and white line art, crisp thick outlines, white background.
-    Constraints: NO grayscale, NO shading, NO colors, NO complex textures. High contrast vector style.
+    Children's coloring book page: ${sceneDescription}.
+    Style: Hand-drawn black and white line art, thick outlines, high contrast.
+    Format: White background only, NO shading, NO colors, NO grayscale, NO complex textures. 
+    Professional KDP style. Large print simple subjects.
   `;
 
   const response = await withRetry<GenerateContentResponse>(() => ai.models.generateContent({
     model: IMAGE_MODEL,
     contents: prompt,
-    config: {
-      imageConfig: {
-        aspectRatio: aspectRatio
-      }
-    }
+    config: { imageConfig: { aspectRatio: aspectRatio } }
   }));
 
-  // Extract image from parts
-  if (response.candidates && response.candidates[0].content && response.candidates[0].content.parts) {
+  if (response.candidates?.[0].content.parts) {
     for (const part of response.candidates[0].content.parts) {
-      if (part.inlineData && part.inlineData.data) {
-        // Convert to full data URI
-        return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
-      }
+      if (part.inlineData?.data) return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
     }
   }
-
-  throw new Error("No image generated in response");
+  throw new Error("No image generated");
 };
 
 export const generateCoverImage = async (topic: string, title: string, aspectRatio: string = "3:4"): Promise<string> => {
     const prompt = `
-      A vibrant, colorful, and eye-catching book cover for a kids' coloring book.
-      Title: "${title}".
-      Theme: ${topic}.
-      Style: Cartoonish, bright colors, inviting, professional typography.
-      The text should be legible if possible, but primarily focus on a great main illustration.
+      Front cover illustration for a kids coloring book: "${topic}".
+      Style: Vibrant, cartoonish, 3D render style, eye-catching bright colors.
+      Inviting and professional. No text if it makes it look messy.
     `;
   
     const response = await withRetry<GenerateContentResponse>(() => ai.models.generateContent({
       model: IMAGE_MODEL,
       contents: prompt,
-      config: {
-        imageConfig: {
-          aspectRatio: aspectRatio
-        }
-      }
+      config: { imageConfig: { aspectRatio: aspectRatio } }
     }));
   
-    if (response.candidates && response.candidates[0].content && response.candidates[0].content.parts) {
+    if (response.candidates?.[0].content.parts) {
       for (const part of response.candidates[0].content.parts) {
-        if (part.inlineData && part.inlineData.data) {
-          return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
-        }
+        if (part.inlineData?.data) return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
       }
     }
-  
     throw new Error("No cover generated");
-  };
+};

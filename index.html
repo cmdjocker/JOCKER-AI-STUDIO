@@ -4,7 +4,6 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>AI KDP Studio - AI Book Cover & Interior Generator</title>
-    <!-- Keeping Tailwind via CDN for simplicity to preserve your custom theme config -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
       tailwind.config = {
@@ -13,7 +12,7 @@
           extend: {
             colors: {
               jocker: {
-                900: '#2e1065', // deep violet
+                900: '#2e1065',
                 800: '#4c1d95',
                 600: '#7c3aed',
                 500: '#8b5cf6',
@@ -28,18 +27,21 @@
       body {
         font-family: 'Inter', sans-serif;
       }
-      /* Ad Placeholder Pattern */
       .ad-pattern {
         background-color: #f3f4f6;
         background-image: radial-gradient(#d1d5db 1px, transparent 1px);
         background-size: 20px 20px;
       }
       .dark .ad-pattern {
-        background-color: #1f2937;
-        background-image: radial-gradient(#374151 1px, transparent 1px);
+        background-color: #1a1a1a;
+        background-image: radial-gradient(#333 1px, transparent 1px);
+      }
+      @keyframes shimmer {
+        0% { transform: translateX(-100%); }
+        100% { transform: translateX(100%); }
       }
     </style>
-  <script type="importmap">
+<script type="importmap">
 {
   "imports": {
     "react": "https://esm.sh/react@^19.2.3",
@@ -48,13 +50,10 @@
     "@google/genai": "https://esm.sh/@google/genai@^1.34.0",
     "jspdf": "https://esm.sh/jspdf@^3.0.4",
     "lucide-react": "https://esm.sh/lucide-react@^0.561.0",
-    "vite": "https://esm.sh/vite@^7.3.0",
-    "@vitejs/plugin-react": "https://esm.sh/@vitejs/plugin-react@^5.1.2",
-    "file-saver": "https://esm.sh/file-saver@^2.0.5",
     "jszip": "https://esm.sh/jszip@^3.10.1",
-    "path": "https://esm.sh/path@^0.12.7",
-    "fs": "https://esm.sh/fs@^0.0.1-security",
-    "url": "https://esm.sh/url@^0.11.4"
+    "file-saver": "https://esm.sh/file-saver@^2.0.5",
+    "vite": "https://esm.sh/vite@^7.3.0",
+    "@vitejs/plugin-react": "https://esm.sh/@vitejs/plugin-react@^5.1.2"
   }
 }
 </script>
