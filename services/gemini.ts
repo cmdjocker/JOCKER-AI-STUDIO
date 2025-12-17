@@ -6,7 +6,7 @@ const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
 const TEXT_MODEL = 'gemini-3-flash-preview';
 const IMAGE_MODEL = 'gemini-2.5-flash-image'; 
 
-async function withRetry<T>(operation: () => Promise<T>, maxRetries = 10, initialDelay = 2000): Promise<T> {
+async function withRetry<T>(operation: () => Promise<T>, maxRetries = 12, initialDelay = 1000): Promise<T> {
   let lastError: any;
   for (let i = 0; i < maxRetries; i++) {
     try {
@@ -21,8 +21,9 @@ async function withRetry<T>(operation: () => Promise<T>, maxRetries = 10, initia
 
       if (isRateLimited || isOverloaded) {
         if (i < maxRetries - 1) {
-            const multiplier = isRateLimited ? 2.5 : 1.5;
-            const delay = Math.max(800, (initialDelay * Math.pow(multiplier, i)) + (Math.random() * 500));
+            // Aggressive initial retry, then exponential
+            const multiplier = isRateLimited ? 2 : 1.5;
+            const delay = Math.max(500, (initialDelay * Math.pow(multiplier, i)) + (Math.random() * 500));
             await new Promise(resolve => setTimeout(resolve, delay));
             continue;
         }
@@ -39,6 +40,7 @@ export const generateBookPlan = async (topic: string): Promise<BookPlan> => {
     The target is "High Reach SEO" for Kindle/KDP.
     
     Requirements:
+    - GENERATE EXACTLY 20 PAGES in the pages array.
     - Title should be keyword rich (e.g. "Space Cats Coloring Book for Kids Ages 4-8").
     - Subtitle should highlight benefits (e.g. "50 Unique Hand-Drawn Pages to Boost Creativity and Fine Motor Skills").
     - Backend keywords must be high-traffic, competitive-niche phrases.
@@ -61,6 +63,8 @@ export const generateBookPlan = async (topic: string): Promise<BookPlan> => {
           keywords: { type: Type.ARRAY, items: { type: Type.STRING } },
           pages: {
             type: Type.ARRAY,
+            minItems: 20,
+            maxItems: 20,
             items: { 
                 type: Type.OBJECT,
                 properties: {

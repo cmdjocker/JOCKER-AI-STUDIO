@@ -126,34 +126,43 @@ export default function App() {
   };
 
   const startImageGeneration = async () => {
-    setState(prev => ({ ...prev, step: 'generating' }));
-    isGeneratingImagesRef.current = true;
-    processQueue();
+    // Transition to generating step
+    setState(prev => {
+      const updatedState = { ...prev, step: 'generating' };
+      isGeneratingImagesRef.current = true;
+      // Trigger queue with the LATEST state data to avoid stale closures
+      processQueue(updatedState);
+      return updatedState;
+    });
   };
 
-  const processQueue = async () => {
-    const BATCH_SIZE = 2; // Increased from 1 to 2 for faster throughput
-    const DELAY_MS = 3000; // Reduced from 12000 to 3000 for faster intervals
-    const aspectRatio = getClosestAspectRatio(state.dimensions.width, state.dimensions.height);
+  const processQueue = async (initialState: GenerationState) => {
+    const BATCH_SIZE = 4; // High parallelism
+    const aspectRatio = getClosestAspectRatio(initialState.dimensions.width, initialState.dimensions.height);
 
-    if (!state.coverImage) {
-        try {
-            const cover = await generateCoverImage(state.topic, state.metadata?.title || "Coloring Ebook", aspectRatio);
+    // Parallel Cover Generation
+    const coverPromise = generateCoverImage(initialState.topic, initialState.metadata?.title || "Coloring Ebook", aspectRatio)
+        .then(cover => {
             setState(prev => ({ ...prev, coverImage: cover }));
-            await new Promise(resolve => setTimeout(resolve, 1500));
-        } catch (e) { console.error("Cover failed", e); }
-    }
+        })
+        .catch(e => console.error("Cover failed", e));
 
-    let pagesToProcess = state.pages.filter(p => p.status === 'pending');
+    let pagesToProcess = [...initialState.pages];
 
-    while (pagesToProcess.length > 0 && isGeneratingImagesRef.current) {
-        const batch = pagesToProcess.slice(0, BATCH_SIZE);
-        pagesToProcess = pagesToProcess.slice(BATCH_SIZE);
-
+    while (pagesToProcess.some(p => p.status === 'pending') && isGeneratingImagesRef.current) {
+        const batch = pagesToProcess.filter(p => p.status === 'pending').slice(0, BATCH_SIZE);
+        
+        // Mark as generating
         setState(prev => ({
             ...prev,
             pages: prev.pages.map(p => batch.find(b => b.id === p.id) ? { ...p, status: 'generating' } : p)
         }));
+        
+        // Also update local tracker to avoid re-selecting these
+        batch.forEach(b => {
+            const idx = pagesToProcess.findIndex(p => p.id === b.id);
+            if (idx !== -1) pagesToProcess[idx].status = 'generating';
+        });
 
         await Promise.all(batch.map(async (page) => {
             try {
@@ -162,8 +171,15 @@ export default function App() {
                     ...prev,
                     pages: prev.pages.map(p => p.id === page.id ? { ...p, status: 'completed', imageUrl: base64Image } : p)
                 }));
+                // Update local status for the loop
+                const idx = pagesToProcess.findIndex(p => p.id === page.id);
+                if (idx !== -1) pagesToProcess[idx].status = 'completed';
             } catch (err) {
+                console.error("Page failed", err);
                 setState(prev => ({ ...prev, pages: prev.pages.map(p => p.id === page.id ? { ...p, status: 'failed' } : p) }));
+                const idx = pagesToProcess.findIndex(p => p.id === page.id);
+                if (idx !== -1) pagesToProcess[idx].status = 'failed';
+
                 if (JSON.stringify(err).includes("429") || JSON.stringify(err).includes("RESOURCE_EXHAUSTED")) {
                     isGeneratingImagesRef.current = false;
                     handleError(err);
@@ -172,16 +188,17 @@ export default function App() {
         }));
 
         setState(prev => {
+            const total = prev.pages.length;
             const completed = prev.pages.filter(p => p.status === 'completed' || p.status === 'failed').length;
-            setProgress(Math.round((completed / prev.pages.length) * 100));
+            setProgress(Math.round((completed / total) * 100));
             return prev;
         });
 
-        if (pagesToProcess.length > 0 && isGeneratingImagesRef.current) {
-            await new Promise(resolve => setTimeout(resolve, DELAY_MS));
-        }
+        // No artificial delay between batches for faster results, relying on withRetry in gemini.ts
     }
     
+    await coverPromise; // Ensure cover finishes if it was slow
+
     isGeneratingImagesRef.current = false;
     setState(prev => {
         const allDone = prev.pages.every(p => p.status === 'completed' || p.status === 'failed');
@@ -352,7 +369,8 @@ export default function App() {
                    <div className="max-w-4xl mx-auto text-center mt-20 animate-in fade-in duration-500">
                        <Loader2 className="h-24 w-24 text-jocker-600 animate-spin mx-auto mb-10" />
                        <h2 className="text-4xl font-black mb-4 tracking-tighter dark:text-white">Rendering High-Reach Assets...</h2>
-                       <p className="text-zinc-500 mb-12 text-lg font-medium">Fast mode enabled. Requesting multiple pages simultaneously.</p>
+                       <p className="text-zinc-500 mb-2 text-lg font-medium">Bulk mode active: Processing 4 pages concurrently for speed.</p>
+                       <p className="text-xs text-jocker-400 font-bold uppercase tracking-widest mb-10">Current Progress: {progress}% Complete</p>
                        <div className="w-full bg-zinc-200 dark:bg-zinc-800 rounded-full h-8 mb-4 overflow-hidden shadow-inner p-1">
                             <div className="bg-gradient-to-r from-jocker-600 to-indigo-500 h-6 rounded-full transition-all duration-700" style={{ width: `${progress}%` }}></div>
                        </div>
@@ -360,8 +378,13 @@ export default function App() {
                            {state.pages.map((p, i) => (
                              <div key={p.id} className="aspect-[1/1.41] bg-white dark:bg-zinc-900 rounded-2xl border-2 border-zinc-100 dark:border-zinc-800 flex flex-col items-center justify-center relative overflow-hidden shadow-md">
                                 {p.status === 'completed' && p.imageUrl ? (
-                                    <img src={p.imageUrl} className="w-full h-full object-contain p-3" alt="Interior" />
-                                ) : <Loader2 className={`h-8 w-8 text-jocker-200 ${p.status === 'generating' ? 'animate-spin' : ''}`} />}
+                                    <img src={p.imageUrl} className="w-full h-full object-contain p-3 animate-in zoom-in-95 duration-500" alt="Interior" />
+                                ) : (
+                                    <div className="flex flex-col items-center gap-3">
+                                        <Loader2 className={`h-8 w-8 text-jocker-200 ${p.status === 'generating' ? 'animate-spin' : ''}`} />
+                                        <span className="text-[8px] font-black text-zinc-400 uppercase tracking-widest">{p.status === 'generating' ? 'Rendering' : 'Queued'}</span>
+                                    </div>
+                                )}
                                 <div className="absolute bottom-2 right-2 bg-black/60 text-white text-[8px] font-black px-2 py-0.5 rounded-full">P{i+1}</div>
                              </div>
                            ))}
