@@ -103,16 +103,21 @@ export default function App() {
 
   // Process the image queue in batches to avoid rate limits
   const processQueue = async () => {
-    // REDUCED batch size and INCREASED delay to handle 429 quota limits more gracefully
-    const BATCH_SIZE = 2; 
-    const DELAY_MS = 15000; // 15 seconds delay between batches
+    // REDUCED batch size to 1 (serial) and INCREASED delay to be extremely safe
+    const BATCH_SIZE = 1; 
+    const DELAY_MS = 20000; // 20 seconds delay between single images
     const aspectRatio = getClosestAspectRatio(state.dimensions.width, state.dimensions.height);
 
-    // 1. Start Cover Generation
+    // 1. Start Cover Generation (Wait for it before starting interior to stay within limits)
     if (!state.coverImage) {
-        generateCoverImage(state.topic, state.metadata?.title || "Coloring Ebook", aspectRatio)
-           .then(cover => setState(prev => ({ ...prev, coverImage: cover })))
-           .catch(e => console.error("Cover failed", e));
+        try {
+            const cover = await generateCoverImage(state.topic, state.metadata?.title || "Coloring Ebook", aspectRatio);
+            setState(prev => ({ ...prev, coverImage: cover }));
+            // Extra safety delay after cover
+            await new Promise(resolve => setTimeout(resolve, 5000));
+        } catch (e) {
+            console.error("Cover failed", e);
+        }
     }
 
     // Get pages that need generation
@@ -130,7 +135,7 @@ export default function App() {
             pages: prev.pages.map(p => batch.find(b => b.id === p.id) ? { ...p, status: 'generating' } : p)
         }));
 
-        // Execute batch concurrently
+        // Execute batch concurrently (even if size is 1)
         await Promise.all(batch.map(async (page) => {
             try {
                 const base64Image = await generateColoringPage(page.prompt, aspectRatio);
@@ -514,7 +519,7 @@ export default function App() {
                    </div>
                    
                    <h2 className="text-3xl font-black text-zinc-900 dark:text-white mb-3">Generating Masterpiece...</h2>
-                   <p className="text-zinc-500 dark:text-zinc-400 mb-10 text-lg">AI KDP Studio is crafting high-resolution vectors for you. We're using a conservative pace to ensure top quality.</p>
+                   <p className="text-zinc-500 dark:text-zinc-400 mb-10 text-lg">AI KDP Studio is crafting high-resolution vectors for you. We're using a stable, serial generation pace to bypass server overloads.</p>
                    
                    <div className="w-full bg-zinc-200 dark:bg-zinc-800 rounded-full h-6 mb-4 overflow-hidden shadow-inner">
                        <div 

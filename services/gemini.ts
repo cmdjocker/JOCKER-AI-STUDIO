@@ -5,49 +5,63 @@ import { BookPlan } from "../types";
 // @ts-ignore - process.env.API_KEY is guaranteed by the runtime environment per instructions
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-const TEXT_MODEL = 'gemini-2.5-flash';
-// Using general image model for speed and availability, prompting for line art
+// Per guidelines: Basic Text Tasks use gemini-3-flash-preview
+const TEXT_MODEL = 'gemini-3-flash-preview';
+// General Image Tasks use gemini-2.5-flash-image
 const IMAGE_MODEL = 'gemini-2.5-flash-image'; 
 
-// Helper function to retry operations on 503 and 429 errors
-async function withRetry<T>(operation: () => Promise<T>, retries = 5, initialDelay = 3000): Promise<T> {
+/**
+ * Robust retry wrapper with exponential backoff and jitter.
+ * Designed to handle both 503 (Overloaded) and 429 (Rate Limit) errors.
+ */
+async function withRetry<T>(operation: () => Promise<T>, maxRetries = 10, initialDelay = 4000): Promise<T> {
   let lastError: any;
   
-  for (let i = 0; i < retries; i++) {
+  for (let i = 0; i < maxRetries; i++) {
     try {
       return await operation();
     } catch (error: any) {
       lastError = error;
       
+      // Extract error info from various possible SDK error structures
       const errorCode = error.status || error.code || error.error?.code;
       const errorStatus = error.status || error.error?.status;
       const errorMessage = (error.message || JSON.stringify(error)).toLowerCase();
 
-      // Check for Rate Limit (429)
-      const isRateLimited = errorCode === 429 || errorMessage.includes('429') || errorMessage.includes('quota') || errorMessage.includes('exhausted');
+      // Check for Rate Limit / Quota (429)
+      const isRateLimited = errorCode === 429 || 
+                          errorMessage.includes('429') || 
+                          errorMessage.includes('quota') || 
+                          errorMessage.includes('exhausted') ||
+                          errorMessage.includes('resource_exhausted');
       
-      // Check for Overloaded (503)
-      const isOverloaded = 
-        errorCode === 503 || 
-        errorStatus === 'UNAVAILABLE' ||
-        errorMessage.includes('503') || 
-        errorMessage.includes('overloaded') ||
-        errorMessage.includes('unavailable') ||
-        errorMessage.includes('server error');
+      // Check for Overloaded / Unavailable (503)
+      const isOverloaded = errorCode === 503 || 
+                          errorStatus === 'UNAVAILABLE' ||
+                          errorMessage.includes('503') || 
+                          errorMessage.includes('overloaded') ||
+                          errorMessage.includes('unavailable') ||
+                          errorMessage.includes('server error');
 
       if (isRateLimited || isOverloaded) {
-        if (i < retries - 1) {
-            // For rate limits, we use a much longer delay
+        if (i < maxRetries - 1) {
+            // Calculate delay with exponential backoff
+            // 429 gets a steeper backoff (multiplier 3) than 503 (multiplier 2)
             const multiplier = isRateLimited ? 3 : 2;
-            const delay = initialDelay * Math.pow(multiplier, i);
+            const baseDelay = initialDelay * Math.pow(multiplier, i);
             
-            console.warn(`Gemini API ${isRateLimited ? 'Rate Limited' : 'Overloaded'}. Retrying in ${delay}ms... (Attempt ${i + 1}/${retries})`);
-            await new Promise(resolve => setTimeout(resolve, delay));
+            // Add jitter (randomness +/- 20%) to prevent synchronized retries
+            const jitter = baseDelay * 0.2 * (Math.random() * 2 - 1);
+            const finalDelay = Math.max(1000, baseDelay + jitter);
+            
+            console.warn(`Gemini API ${isRateLimited ? 'Rate Limited (429)' : 'Overloaded (503)'}. Retrying in ${Math.round(finalDelay)}ms... (Attempt ${i + 1}/${maxRetries})`);
+            
+            await new Promise(resolve => setTimeout(resolve, finalDelay));
             continue;
         }
       }
       
-      // If it's not a retryable error or we ran out of retries, throw
+      // If it's a fatal error (like 400 Bad Request) or we're out of retries, throw
       throw error;
     }
   }
