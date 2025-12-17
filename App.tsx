@@ -105,6 +105,10 @@ export default function App() {
 
     try {
       const plan: BookPlan = await generateBookPlan(state.topic);
+      if (!plan.pages || plan.pages.length === 0) {
+        throw new Error("Failed to generate a book plan. Please try a different topic.");
+      }
+      
       const initialPages: PageDefinition[] = plan.pages.map((page, index) => ({
         id: `page-${index}-${Date.now()}`,
         title: page.title,
@@ -126,21 +130,20 @@ export default function App() {
   };
 
   const startImageGeneration = async () => {
-    // Transition to generating step
     setState(prev => {
       const updatedState = { ...prev, step: 'generating' };
       isGeneratingImagesRef.current = true;
-      // Trigger queue with the LATEST state data to avoid stale closures
+      setProgress(0);
       processQueue(updatedState);
       return updatedState;
     });
   };
 
   const processQueue = async (initialState: GenerationState) => {
-    const BATCH_SIZE = 4; // High parallelism
+    const BATCH_SIZE = 4;
     const aspectRatio = getClosestAspectRatio(initialState.dimensions.width, initialState.dimensions.height);
 
-    // Parallel Cover Generation
+    // Cover starts immediately in background
     const coverPromise = generateCoverImage(initialState.topic, initialState.metadata?.title || "Coloring Ebook", aspectRatio)
         .then(cover => {
             setState(prev => ({ ...prev, coverImage: cover }));
@@ -152,13 +155,13 @@ export default function App() {
     while (pagesToProcess.some(p => p.status === 'pending') && isGeneratingImagesRef.current) {
         const batch = pagesToProcess.filter(p => p.status === 'pending').slice(0, BATCH_SIZE);
         
-        // Mark as generating
+        // Mark current batch as generating
         setState(prev => ({
             ...prev,
             pages: prev.pages.map(p => batch.find(b => b.id === p.id) ? { ...p, status: 'generating' } : p)
         }));
         
-        // Also update local tracker to avoid re-selecting these
+        // Update local tracker
         batch.forEach(b => {
             const idx = pagesToProcess.findIndex(p => p.id === b.id);
             if (idx !== -1) pagesToProcess[idx].status = 'generating';
@@ -171,7 +174,6 @@ export default function App() {
                     ...prev,
                     pages: prev.pages.map(p => p.id === page.id ? { ...p, status: 'completed', imageUrl: base64Image } : p)
                 }));
-                // Update local status for the loop
                 const idx = pagesToProcess.findIndex(p => p.id === page.id);
                 if (idx !== -1) pagesToProcess[idx].status = 'completed';
             } catch (err) {
@@ -189,15 +191,13 @@ export default function App() {
 
         setState(prev => {
             const total = prev.pages.length;
-            const completed = prev.pages.filter(p => p.status === 'completed' || p.status === 'failed').length;
-            setProgress(Math.round((completed / total) * 100));
+            const done = prev.pages.filter(p => p.status === 'completed' || p.status === 'failed').length;
+            setProgress(Math.round((done / total) * 100));
             return prev;
         });
-
-        // No artificial delay between batches for faster results, relying on withRetry in gemini.ts
     }
     
-    await coverPromise; // Ensure cover finishes if it was slow
+    await coverPromise;
 
     isGeneratingImagesRef.current = false;
     setState(prev => {
@@ -369,7 +369,7 @@ export default function App() {
                    <div className="max-w-4xl mx-auto text-center mt-20 animate-in fade-in duration-500">
                        <Loader2 className="h-24 w-24 text-jocker-600 animate-spin mx-auto mb-10" />
                        <h2 className="text-4xl font-black mb-4 tracking-tighter dark:text-white">Rendering High-Reach Assets...</h2>
-                       <p className="text-zinc-500 mb-2 text-lg font-medium">Bulk mode active: Processing 4 pages concurrently for speed.</p>
+                       <p className="text-zinc-500 mb-2 text-lg font-medium">Bulk mode active: Processing pages concurrently for maximum speed.</p>
                        <p className="text-xs text-jocker-400 font-bold uppercase tracking-widest mb-10">Current Progress: {progress}% Complete</p>
                        <div className="w-full bg-zinc-200 dark:bg-zinc-800 rounded-full h-8 mb-4 overflow-hidden shadow-inner p-1">
                             <div className="bg-gradient-to-r from-jocker-600 to-indigo-500 h-6 rounded-full transition-all duration-700" style={{ width: `${progress}%` }}></div>
@@ -382,7 +382,7 @@ export default function App() {
                                 ) : (
                                     <div className="flex flex-col items-center gap-3">
                                         <Loader2 className={`h-8 w-8 text-jocker-200 ${p.status === 'generating' ? 'animate-spin' : ''}`} />
-                                        <span className="text-[8px] font-black text-zinc-400 uppercase tracking-widest">{p.status === 'generating' ? 'Rendering' : 'Queued'}</span>
+                                        <span className="text-[8px] font-black text-zinc-400 uppercase tracking-widest">{p.status === 'generating' ? 'Rendering' : (p.status === 'failed' ? 'Failed' : 'Queued')}</span>
                                     </div>
                                 )}
                                 <div className="absolute bottom-2 right-2 bg-black/60 text-white text-[8px] font-black px-2 py-0.5 rounded-full">P{i+1}</div>
