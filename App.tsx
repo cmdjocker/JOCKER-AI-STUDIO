@@ -33,7 +33,8 @@ import {
   ChevronRight,
   Zap,
   User,
-  Fingerprint
+  Fingerprint,
+  Info
 } from 'lucide-react';
 import JSZip from 'jszip';
 import saveAs from 'file-saver';
@@ -54,7 +55,7 @@ const INITIAL_STATE: GenerationState = {
 export default function App() {
   const [state, setState] = useState<GenerationState>(INITIAL_STATE);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{message: string, isQuota?: boolean} | null>(null);
   const [progress, setProgress] = useState(0);
   const [darkMode, setDarkMode] = useState(false);
   const [billingCycle, setBillingCycle] = useState<'monthly' | 'yearly'>('monthly');
@@ -74,10 +75,45 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, [state.step, state.view]);
 
+  // Unified Error Parser
+  const handleError = (err: any) => {
+    console.error("API Error:", err);
+    let message = "An unexpected error occurred.";
+    let isQuota = false;
+
+    try {
+      // Check for Gemini SDK error structure
+      const errStr = typeof err === 'string' ? err : JSON.stringify(err);
+      if (errStr.includes("RESOURCE_EXHAUSTED") || errStr.includes("429") || errStr.includes("quota")) {
+        message = "Daily Generation Limit Reached. The AI engine is currently resting. Please wait a moment or upgrade to VIP for unlimited access.";
+        isQuota = true;
+      } else if (err.message) {
+        message = err.message;
+      }
+    } catch (e) {
+      message = err?.message || "Connection lost. Please check your internet.";
+    }
+
+    setError({ message, isQuota });
+    setLoading(false);
+  };
+
   // Navigation Handler
   const navigate = (view: ViewType) => {
-    setState(prev => ({ ...prev, view }));
+    setState(prev => {
+      if (view === 'home') {
+        return {
+          ...INITIAL_STATE,
+          view: 'home',
+          dimensions: prev.dimensions
+        };
+      }
+      return { ...prev, view };
+    });
     setError(null);
+    if (view !== 'home') {
+      isGeneratingImagesRef.current = false;
+    }
   };
 
   const handleGeneratePlan = async () => {
@@ -101,7 +137,7 @@ export default function App() {
         pages: initialPages
       }));
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to generate ebook plan.');
+      handleError(err);
     } finally {
       setLoading(false);
     }
@@ -115,14 +151,14 @@ export default function App() {
 
   const processQueue = async () => {
     const BATCH_SIZE = 1; 
-    const DELAY_MS = 20000; 
+    const DELAY_MS = 15000; 
     const aspectRatio = getClosestAspectRatio(state.dimensions.width, state.dimensions.height);
 
     if (!state.coverImage) {
         try {
             const cover = await generateCoverImage(state.topic, state.metadata?.title || "Coloring Ebook", aspectRatio);
             setState(prev => ({ ...prev, coverImage: cover }));
-            await new Promise(resolve => setTimeout(resolve, 5000));
+            await new Promise(resolve => setTimeout(resolve, 3000));
         } catch (e) {
             console.error("Cover failed", e);
         }
@@ -153,6 +189,11 @@ export default function App() {
                     ...prev,
                     pages: prev.pages.map(p => p.id === page.id ? { ...p, status: 'failed' } : p)
                 }));
+                // Check if it's a quota error to stop the whole queue
+                if (JSON.stringify(err).includes("429") || JSON.stringify(err).includes("RESOURCE_EXHAUSTED")) {
+                    isGeneratingImagesRef.current = false;
+                    handleError(err);
+                }
             }
         }));
 
@@ -183,6 +224,7 @@ export default function App() {
           ...prev,
           pages: prev.pages.map(p => p.id === pageId ? { ...p, status: 'generating' } : p)
       }));
+      setError(null);
       try {
           const base64Image = await generateColoringPage(prompt, aspectRatio);
           setState(prev => ({
@@ -191,6 +233,7 @@ export default function App() {
           }));
       } catch (err) {
           setState(prev => ({ ...prev, pages: prev.pages.map(p => p.id === pageId ? { ...p, status: 'failed' } : p) }));
+          handleError(err);
       }
   };
 
@@ -328,7 +371,6 @@ export default function App() {
             Eliminate generation delays, unlock 4K high-resolution vectors, and dominate the Amazon KDP marketplace.
           </p>
           
-          {/* Billing Switcher */}
           <div className="mt-12 flex flex-col sm:flex-row items-center justify-center gap-4 sm:gap-8">
               <span className={`text-sm font-black uppercase tracking-widest transition-colors ${billingCycle === 'monthly' ? 'text-jocker-600' : 'text-zinc-400'}`}>Pay Monthly</span>
               <div 
@@ -347,7 +389,6 @@ export default function App() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-8 mb-20 items-stretch">
-          {/* BASIC */}
           <div className="bg-white dark:bg-zinc-900 p-10 rounded-[2.5rem] border border-zinc-100 dark:border-zinc-800 shadow-xl flex flex-col group hover:-translate-y-2 transition-all">
               <div className="mb-8">
                   <h3 className="text-xl font-black text-zinc-900 dark:text-white mb-1">Standard</h3>
@@ -366,7 +407,6 @@ export default function App() {
               <button onClick={() => navigate('home')} className="w-full py-5 rounded-2xl border-2 border-zinc-100 dark:border-zinc-800 text-zinc-400 font-black tracking-widest text-xs group-hover:bg-zinc-50 dark:group-hover:bg-zinc-800 transition-all">CHOOSE BASIC</button>
           </div>
 
-          {/* PRO - CENTERPIECE */}
           <div className="bg-jocker-900 p-10 rounded-[3rem] border-4 border-jocker-500 shadow-[0_30px_60px_-15px_rgba(124,58,237,0.3)] flex flex-col relative overflow-hidden transform md:scale-110 z-20 group">
               <div className="absolute top-6 right-6 bg-gradient-to-r from-amber-400 to-yellow-600 text-zinc-900 text-[10px] font-black px-4 py-1.5 rounded-full uppercase tracking-widest shadow-lg">Bestseller</div>
               <div className="absolute -bottom-20 -left-20 w-64 h-64 bg-jocker-500/10 rounded-full blur-3xl pointer-events-none"></div>
@@ -389,7 +429,6 @@ export default function App() {
               <button className="w-full py-5 rounded-2xl bg-jocker-500 hover:bg-jocker-400 text-white font-black shadow-xl transition-all shadow-jocker-600/40 uppercase tracking-widest text-sm relative z-10 group-hover:scale-[1.02]">GET PRO ACCESS</button>
           </div>
 
-          {/* ELITE */}
           <div className="bg-white dark:bg-zinc-900 p-10 rounded-[2.5rem] border border-zinc-100 dark:border-zinc-800 shadow-xl flex flex-col group hover:-translate-y-2 transition-all">
               <div className="mb-8">
                   <h3 className="text-xl font-black text-zinc-900 dark:text-white mb-1">Studio Elite</h3>
@@ -466,7 +505,6 @@ export default function App() {
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-zinc-950 transition-colors duration-300 flex flex-col font-sans">
       
-      {/* Sidebar Social (Floating) */}
       <div className="fixed right-0 top-1/2 -translate-y-1/2 z-40 flex flex-col bg-white dark:bg-zinc-900 shadow-2xl rounded-l-2xl overflow-hidden border border-r-0 border-zinc-200 dark:border-zinc-800">
           <a href="#" className="p-4 hover:bg-blue-600 hover:text-white text-blue-600 transition-all"><Facebook className="h-5 w-5" /></a>
           <a href="#" className="p-4 hover:bg-pink-600 hover:text-white text-pink-600 transition-all"><Instagram className="h-5 w-5" /></a>
@@ -474,14 +512,12 @@ export default function App() {
           <div className="p-4 bg-zinc-50 dark:bg-zinc-800 text-[9px] font-black vertical-text flex items-center justify-center py-6 text-zinc-400 tracking-[0.2em] select-none">SOCIALS</div>
       </div>
 
-      {/* Floating Support */}
       <div className="fixed bottom-8 right-8 z-50">
           <button className="bg-jocker-600 hover:bg-jocker-800 text-white w-16 h-16 rounded-full shadow-[0_15px_30px_-5px_rgba(124,58,237,0.5)] flex items-center justify-center transition-all hover:scale-110 active:scale-95 group">
               <MessageCircle className="h-7 w-7 group-hover:rotate-12 transition-transform" />
           </button>
       </div>
 
-      {/* Navigation Header */}
       <header className="bg-jocker-900 text-white shadow-2xl sticky top-0 z-50 border-b border-jocker-800 h-24 backdrop-blur-md bg-opacity-95">
         <div className="max-w-[1440px] mx-auto px-6 h-full flex items-center justify-between">
           <button onClick={() => navigate('home')} className="flex items-center gap-4 hover:opacity-80 transition-all active:scale-95 text-left group">
@@ -523,9 +559,7 @@ export default function App() {
         </div>
       </header>
 
-      {/* Main Viewport */}
       <div className="flex-grow flex justify-center w-full max-w-[1600px] mx-auto relative">
-        {/* Left Ad Placeholder */}
         <aside className="hidden xl:flex flex-col w-[220px] shrink-0 p-6 gap-6 border-r border-zinc-200 dark:border-zinc-800 bg-white/40 dark:bg-zinc-900/40">
             <div className="w-full h-[600px] ad-pattern rounded-3xl border border-dashed border-zinc-300 dark:border-zinc-700 flex flex-col items-center justify-center text-zinc-400 p-8 text-center">
                 <ImageIcon className="h-10 w-10 mb-4 opacity-20" />
@@ -535,22 +569,28 @@ export default function App() {
 
         <main className="flex-1 max-w-5xl px-6 py-12 w-full min-w-0">
           {error && (
-            <div className="mb-10 bg-red-50 dark:bg-red-950/30 border-l-4 border-red-600 p-6 rounded-2xl shadow-sm flex items-start gap-4 animate-in slide-in-from-top-4">
-              <AlertCircle className="h-6 w-6 text-red-600 mt-1" />
-              <div>
-                <p className="font-black text-red-900 dark:text-red-200 uppercase text-xs tracking-widest mb-1">System Exception</p>
-                <p className="text-sm text-red-700 dark:text-red-400 font-medium">{error}</p>
+            <div className={`mb-10 p-6 rounded-2xl shadow-xl flex items-start gap-4 animate-in slide-in-from-top-4 border-l-8 ${error.isQuota ? 'bg-amber-50 dark:bg-amber-950/30 border-amber-500' : 'bg-red-50 dark:bg-red-950/30 border-red-600'}`}>
+              {error.isQuota ? <Info className="h-6 w-6 text-amber-600 mt-1" /> : <AlertCircle className="h-6 w-6 text-red-600 mt-1" />}
+              <div className="flex-grow">
+                <p className={`font-black uppercase text-xs tracking-widest mb-1 ${error.isQuota ? 'text-amber-900 dark:text-amber-200' : 'text-red-900 dark:text-red-200'}`}>
+                    {error.isQuota ? 'Free Tier Limit Reached' : 'System Exception'}
+                </p>
+                <p className={`text-sm font-medium ${error.isQuota ? 'text-amber-700 dark:text-amber-400' : 'text-red-700 dark:text-red-400'}`}>{error.message}</p>
+                {error.isQuota && (
+                    <button onClick={() => navigate('vip')} className="mt-4 bg-amber-600 hover:bg-amber-700 text-white px-5 py-2 rounded-xl text-xs font-black uppercase tracking-widest transition-all shadow-lg flex items-center gap-2">
+                        <Crown className="h-3.5 w-3.5" /> Unlock Unlimited Access
+                    </button>
+                )}
               </div>
+              <button onClick={() => setError(null)} className="text-zinc-400 hover:text-zinc-600"><Lock className="h-4 w-4 rotate-45" /></button>
             </div>
           )}
 
-          {/* DYNAMIC VIEW ROUTER */}
           {state.view === 'login' && <LoginView />}
           {state.view === 'register' && <RegisterView />}
           {state.view === 'vip' && <VIPView />}
           {state.view === 'canva' && <CanvaView />}
 
-          {/* GENERATOR FLOW (HOME) */}
           {state.view === 'home' && (
             <div className="animate-in fade-in duration-700">
               {state.step === 'input' && (
@@ -703,7 +743,6 @@ export default function App() {
           )}
         </main>
 
-        {/* Right Ad Placeholder */}
         <aside className="hidden xl:flex flex-col w-[220px] shrink-0 p-6 gap-6 border-l border-zinc-200 dark:border-zinc-800 bg-white/40 dark:bg-zinc-900/40">
             <div className="w-full h-[600px] ad-pattern rounded-3xl border border-dashed border-zinc-300 dark:border-zinc-700 flex flex-col items-center justify-center text-zinc-400 p-8 text-center">
                 <ImageIcon className="h-10 w-10 mb-4 opacity-20" />
@@ -717,7 +756,6 @@ export default function App() {
         </aside>
       </div>
       
-      {/* Dynamic Footer */}
       <footer className="mt-auto bg-white dark:bg-zinc-950 border-t border-zinc-200 dark:border-zinc-800 py-16">
           <div className="max-w-7xl mx-auto px-10">
               <div className="grid grid-cols-1 md:grid-cols-4 gap-12 mb-16">
