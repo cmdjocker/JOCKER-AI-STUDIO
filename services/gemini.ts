@@ -6,7 +6,7 @@ const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
 const TEXT_MODEL = 'gemini-3-flash-preview';
 const IMAGE_MODEL = 'gemini-2.5-flash-image'; 
 
-async function withRetry<T>(operation: () => Promise<T>, maxRetries = 10, initialDelay = 4000): Promise<T> {
+async function withRetry<T>(operation: () => Promise<T>, maxRetries = 10, initialDelay = 2000): Promise<T> {
   let lastError: any;
   for (let i = 0; i < maxRetries; i++) {
     try {
@@ -21,8 +21,8 @@ async function withRetry<T>(operation: () => Promise<T>, maxRetries = 10, initia
 
       if (isRateLimited || isOverloaded) {
         if (i < maxRetries - 1) {
-            const multiplier = isRateLimited ? 3 : 2;
-            const delay = Math.max(1000, (initialDelay * Math.pow(multiplier, i)) + (Math.random() * 1000));
+            const multiplier = isRateLimited ? 2.5 : 1.5;
+            const delay = Math.max(800, (initialDelay * Math.pow(multiplier, i)) + (Math.random() * 500));
             await new Promise(resolve => setTimeout(resolve, delay));
             continue;
         }

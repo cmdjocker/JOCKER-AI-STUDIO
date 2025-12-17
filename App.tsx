@@ -132,23 +132,23 @@ export default function App() {
   };
 
   const processQueue = async () => {
-    const BATCH_SIZE = 1; 
-    const DELAY_MS = 12000; 
+    const BATCH_SIZE = 2; // Increased from 1 to 2 for faster throughput
+    const DELAY_MS = 3000; // Reduced from 12000 to 3000 for faster intervals
     const aspectRatio = getClosestAspectRatio(state.dimensions.width, state.dimensions.height);
 
     if (!state.coverImage) {
         try {
             const cover = await generateCoverImage(state.topic, state.metadata?.title || "Coloring Ebook", aspectRatio);
             setState(prev => ({ ...prev, coverImage: cover }));
-            await new Promise(resolve => setTimeout(resolve, 3000));
+            await new Promise(resolve => setTimeout(resolve, 1500));
         } catch (e) { console.error("Cover failed", e); }
     }
 
-    const pagesToProcess = state.pages.filter(p => p.status === 'pending');
+    let pagesToProcess = state.pages.filter(p => p.status === 'pending');
 
-    for (let i = 0; i < pagesToProcess.length; i += BATCH_SIZE) {
-        if (!isGeneratingImagesRef.current) break;
-        const batch = pagesToProcess.slice(i, i + BATCH_SIZE);
+    while (pagesToProcess.length > 0 && isGeneratingImagesRef.current) {
+        const batch = pagesToProcess.slice(0, BATCH_SIZE);
+        pagesToProcess = pagesToProcess.slice(BATCH_SIZE);
 
         setState(prev => ({
             ...prev,
@@ -177,7 +177,7 @@ export default function App() {
             return prev;
         });
 
-        if (i + BATCH_SIZE < pagesToProcess.length && isGeneratingImagesRef.current) {
+        if (pagesToProcess.length > 0 && isGeneratingImagesRef.current) {
             await new Promise(resolve => setTimeout(resolve, DELAY_MS));
         }
     }
@@ -352,7 +352,7 @@ export default function App() {
                    <div className="max-w-4xl mx-auto text-center mt-20 animate-in fade-in duration-500">
                        <Loader2 className="h-24 w-24 text-jocker-600 animate-spin mx-auto mb-10" />
                        <h2 className="text-4xl font-black mb-4 tracking-tighter dark:text-white">Rendering High-Reach Assets...</h2>
-                       <p className="text-zinc-500 mb-12 text-lg font-medium">Please stay active. Generating crisp, high-contrast line art.</p>
+                       <p className="text-zinc-500 mb-12 text-lg font-medium">Fast mode enabled. Requesting multiple pages simultaneously.</p>
                        <div className="w-full bg-zinc-200 dark:bg-zinc-800 rounded-full h-8 mb-4 overflow-hidden shadow-inner p-1">
                             <div className="bg-gradient-to-r from-jocker-600 to-indigo-500 h-6 rounded-full transition-all duration-700" style={{ width: `${progress}%` }}></div>
                        </div>
@@ -361,7 +361,7 @@ export default function App() {
                              <div key={p.id} className="aspect-[1/1.41] bg-white dark:bg-zinc-900 rounded-2xl border-2 border-zinc-100 dark:border-zinc-800 flex flex-col items-center justify-center relative overflow-hidden shadow-md">
                                 {p.status === 'completed' && p.imageUrl ? (
                                     <img src={p.imageUrl} className="w-full h-full object-contain p-3" alt="Interior" />
-                                ) : <Loader2 className="h-8 w-8 text-jocker-200 animate-spin" />}
+                                ) : <Loader2 className={`h-8 w-8 text-jocker-200 ${p.status === 'generating' ? 'animate-spin' : ''}`} />}
                                 <div className="absolute bottom-2 right-2 bg-black/60 text-white text-[8px] font-black px-2 py-0.5 rounded-full">P{i+1}</div>
                              </div>
                            ))}
