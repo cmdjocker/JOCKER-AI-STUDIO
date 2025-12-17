@@ -1,17 +1,14 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { 
   BookOpen, 
   Wand2, 
   Download, 
   Loader2, 
   RefreshCw, 
-  CheckCircle2, 
   AlertCircle, 
-  Pencil, 
   Image as ImageIcon,
   Settings,
   Ruler,
-  FileImage,
   FileArchive,
   Moon,
   Sun,
