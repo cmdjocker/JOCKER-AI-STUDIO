@@ -11,11 +11,18 @@
         theme: {
           extend: {
             colors: {
-              jocker: {
-                900: '#2e1065',
-                800: '#4c1d95',
-                600: '#7c3aed',
-                500: '#8b5cf6',
+              brand: {
+                950: '#020617',
+                900: '#0f172a',
+                800: '#1e293b',
+                700: '#334155',
+                600: '#2563eb',
+                500: '#3b82f6',
+                400: '#60a5fa',
+                300: '#93c5fd',
+                200: '#bfdbfe',
+                100: '#dbeafe',
+                50: '#eff6ff',
               }
             }
           }
@@ -28,13 +35,13 @@
         font-family: 'Inter', sans-serif;
       }
       .ad-pattern {
-        background-color: #f3f4f6;
-        background-image: radial-gradient(#d1d5db 1px, transparent 1px);
+        background-color: #f8fafc;
+        background-image: radial-gradient(#e2e8f0 1px, transparent 1px);
         background-size: 20px 20px;
       }
       .dark .ad-pattern {
-        background-color: #1a1a1a;
-        background-image: radial-gradient(#333 1px, transparent 1px);
+        background-color: #0f172a;
+        background-image: radial-gradient(#1e293b 1px, transparent 1px);
       }
       @keyframes shimmer {
         0% { transform: translateX(-100%); }
@@ -58,7 +65,7 @@
 }
 </script>
 </head>
-  <body class="bg-gray-50 text-zinc-900 antialiased selection:bg-purple-200 selection:text-purple-900">
+  <body class="bg-slate-50 text-slate-900 antialiased selection:bg-brand-100 selection:text-brand-900">
     <div id="root"></div>
     <script type="module" src="/index.tsx"></script>
   </body>
