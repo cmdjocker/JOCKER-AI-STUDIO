@@ -5,7 +5,7 @@ import { BookPlan } from "../types";
 const TEXT_MODEL = 'gemini-3-flash-preview';
 const IMAGE_MODEL = 'gemini-2.5-flash-image'; 
 
-async function withRetry<T>(operation: () => Promise<T>, maxRetries = 8, initialDelay = 3000): Promise<T> {
+async function withRetry<T>(operation: () => Promise<T>, maxRetries = 12, initialDelay = 6000): Promise<T> {
   let lastError: any;
   for (let i = 0; i < maxRetries; i++) {
     try {
@@ -15,14 +15,14 @@ async function withRetry<T>(operation: () => Promise<T>, maxRetries = 8, initial
       const errorCode = (error as any).status || (error as any).code || (error as any).error?.code;
       const errorMessage = (error.message || JSON.stringify(error)).toLowerCase();
 
-      const isRateLimited = errorCode === 429 || errorMessage.includes('429') || errorMessage.includes('quota');
+      const isRateLimited = errorCode === 429 || errorMessage.includes('429') || errorMessage.includes('quota') || errorMessage.includes('resource_exhausted');
       const isOverloaded = errorCode === 503 || errorMessage.includes('503') || errorMessage.includes('overloaded');
 
       if (isRateLimited || isOverloaded) {
         if (i < maxRetries - 1) {
-            // Adaptive backoff: Wait longer on each attempt
-            const delay = (initialDelay * Math.pow(1.5, i)) + (Math.random() * 1000);
-            console.warn(`Rate limit detected. Backing off for ${Math.round(delay)}ms...`);
+            // Exponential backoff with significant jitter
+            const delay = (initialDelay * Math.pow(1.6, i)) + (Math.random() * 2000);
+            console.warn(`[KDP Studio] Quota limit/Busy. Retry ${i+1}/${maxRetries} in ${Math.round(delay)}ms...`);
             await new Promise(resolve => setTimeout(resolve, delay));
             continue;
         }
@@ -37,11 +37,11 @@ const getAI = () => new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 export const generateBookPlan = async (topic: string): Promise<BookPlan> => {
   const prompt = `
-    You are a professional Amazon KDP strategist. Create a plan for a niche children's coloring book about "${topic}".
-    The target is "High Reach SEO" for Kindle/KDP.
-    Requirements:
-    - GENERATE EXACTLY 20 UNIQUE PAGES in the pages array.
-    - Return JSON matching the schema with keyword rich metadata.
+    Professional Amazon KDP Strategist:
+    Create a detailed plan for a children's coloring book about "${topic}".
+    Target: High-Reach SEO for Amazon.
+    Generate EXACTLY 20 unique page titles and detailed drawing prompts.
+    Return JSON only.
   `;
 
   const ai = getAI();
@@ -96,10 +96,10 @@ export const getClosestAspectRatio = (width: number, height: number): string => 
 
 export const generateColoringPage = async (sceneDescription: string, aspectRatio: string = "3:4"): Promise<string> => {
   const prompt = `
-    Children's coloring book page: ${sceneDescription}.
-    Style: Professional hand-drawn black and white line art, thick outlines, high contrast.
-    Format: Pure white background ONLY, NO shading, NO colors, NO grayscale, NO textures. 
-    Large print simple subjects. KDP interior compatible.
+    KDP Interior Drawing: ${sceneDescription}.
+    Style: Hand-drawn black and white line art coloring page. 
+    Instructions: High contrast, thick outlines, white background, no shading, no gray, no textures. 
+    Professional professional children's coloring book style.
   `;
 
   const ai = getAI();
@@ -115,11 +115,11 @@ export const generateColoringPage = async (sceneDescription: string, aspectRatio
       if (part.inlineData?.data) return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
     }
   }
-  throw new Error("API response did not contain image data.");
+  throw new Error("No image data returned from AI.");
 };
 
 export const generateCoverImage = async (topic: string, title: string, aspectRatio: string = "3:4"): Promise<string> => {
-    const prompt = `Front cover illustration for a children's coloring book: "${topic}". Vibrant, cartoonish, 3D render look.`;
+    const prompt = `Book cover for coloring book: ${topic}. Digital art, vivid colors, 3D render style, kid-friendly.`;
     const ai = getAI();
     const response = await withRetry<GenerateContentResponse>(() => ai.models.generateContent({
       model: IMAGE_MODEL,
@@ -132,5 +132,5 @@ export const generateCoverImage = async (topic: string, title: string, aspectRat
         if (part.inlineData?.data) return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
       }
     }
-    throw new Error("API response did not contain cover image data.");
+    throw new Error("No cover image returned.");
 };
