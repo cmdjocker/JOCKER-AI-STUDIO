@@ -49,9 +49,24 @@ export const generatePDF = (metadata: BookMetadata, pages: PageDefinition[], dim
       doc.addPage(); // Main content page
       
       const contentWidth = pageWidth - (margin * 2);
-      const titleY = margin + (dimensions.unit === 'in' ? 0.2 : 20);
-      const imageStartY = titleY + (dimensions.unit === 'in' ? 0.3 : 30);
-      const availableHeight = pageHeight - (margin * 2) - imageStartY; 
+      const titleY = margin + (dimensions.unit === 'in' ? 0.3 : 30);
+      const bottomTextY = pageHeight - margin + (dimensions.unit === 'in' ? 0.2 : 20);
+      
+      const imageStartY = titleY + (dimensions.unit === 'in' ? 0.4 : 40);
+      const imageEndY = bottomTextY - (dimensions.unit === 'in' ? 0.4 : 40);
+      const availableHeight = imageEndY - imageStartY;
+
+      // Print Title at Top
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(18);
+      doc.text(page.title.toUpperCase(), pageWidth / 2, titleY, { align: "center" });
+
+      // Print Saying at Bottom
+      if (page.saying) {
+        doc.setFont("helvetica", "italic");
+        doc.setFontSize(14);
+        doc.text(page.saying, pageWidth / 2, bottomTextY, { align: "center" });
+      }
 
       try {
         const imgProps = doc.getImageProperties(page.imageUrl);
@@ -68,12 +83,14 @@ export const generatePDF = (metadata: BookMetadata, pages: PageDefinition[], dim
         const y = imageStartY + (availableHeight - printHeight) / 2;
         doc.addImage(page.imageUrl, "PNG", x, y, printWidth, printHeight); 
       } catch (e) {
-        doc.addImage(page.imageUrl, "PNG", margin, imageStartY, contentWidth, contentWidth * 1.3);
+        doc.addImage(page.imageUrl, "PNG", margin, imageStartY, contentWidth, availableHeight);
       }
       
+      doc.setFont("helvetica", "normal");
       doc.setFontSize(8);
       doc.setTextColor(150);
-      doc.text(`${index + 1}`, pageWidth / 2, pageHeight - (margin/2), { align: "center" });
+      doc.text(`${index + 1}`, pageWidth / 2, pageHeight - (margin/3), { align: "center" });
+      doc.setTextColor(0);
     }
   });
 
@@ -122,4 +139,19 @@ export const generateSingleImagePDF = (imageUrl: string, title: string, dimensio
   }
 
   doc.save(`${title.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_page.pdf`);
+};
+
+/**
+ * Generates a print-ready PDF for the cover
+ */
+export const generateCoverPDF = (imageUrl: string, title: string, dimensions: BookDimensions) => {
+    const doc = new jsPDF({
+        orientation: dimensions.width > dimensions.height ? "landscape" : "portrait",
+        unit: dimensions.unit,
+        format: [dimensions.width, dimensions.height]
+    });
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+    doc.addImage(imageUrl, "JPEG", 0, 0, pageWidth, pageHeight);
+    doc.save(`${title.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_cover_print.pdf`);
 };

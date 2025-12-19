@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
-import { BookPlan } from "../types";
+import { BookPlan, BookDimensions } from "../types";
 
 const TEXT_MODEL = 'gemini-3-flash-preview';
 const IMAGE_MODEL = 'gemini-2.5-flash-image'; 
@@ -20,9 +20,7 @@ async function withRetry<T>(operation: () => Promise<T>, maxRetries = 12, initia
 
       if (isRateLimited || isOverloaded) {
         if (i < maxRetries - 1) {
-            // Exponential backoff with significant jitter
             const delay = (initialDelay * Math.pow(1.6, i)) + (Math.random() * 2000);
-            console.warn(`[KDP Studio] Quota limit/Busy. Retry ${i+1}/${maxRetries} in ${Math.round(delay)}ms...`);
             await new Promise(resolve => setTimeout(resolve, delay));
             continue;
         }
@@ -35,12 +33,46 @@ async function withRetry<T>(operation: () => Promise<T>, maxRetries = 12, initia
 
 const getAI = () => new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-export const generateBookPlan = async (topic: string): Promise<BookPlan> => {
+/**
+ * Analyzes an uploaded template to extract KDP obligations and dimensions
+ */
+export const analyzeCoverTemplate = async (imageBase64: string): Promise<Partial<BookDimensions>> => {
+    const ai = getAI();
+    const data = imageBase64.split(',')[1];
+    const mimeType = imageBase64.split(';')[0].split(':')[1];
+    
+    const prompt = `
+        Analyze this KDP cover template image. 
+        Extract the intended Width and Height (usually in inches).
+        Identify if there is a spine area.
+        Return ONLY a JSON object: {"width": number, "height": number, "hasSpine": boolean}.
+    `;
+
+    const response = await withRetry(() => ai.models.generateContent({
+        model: TEXT_MODEL,
+        contents: {
+            parts: [
+                { inlineData: { data, mimeType } },
+                { text: prompt }
+            ]
+        },
+        config: { responseMimeType: "application/json" }
+    }));
+
+    try {
+        return JSON.parse(response.text);
+    } catch (e) {
+        return {};
+    }
+};
+
+export const generateBookPlan = async (topic: string, targetAge: string): Promise<BookPlan> => {
   const prompt = `
     Professional Amazon KDP Strategist:
-    Create a detailed plan for a children's coloring book about "${topic}".
+    Create a detailed plan for a children's coloring book for target age "${targetAge}" about "${topic}".
     Target: High-Reach SEO for Amazon.
-    Generate EXACTLY 20 unique page titles and detailed drawing prompts.
+    The content MUST be age-appropriate for ${targetAge} year olds.
+    Generate EXACTLY 20 unique page titles, detailed drawing prompts, and a cute/adorable short saying for each page.
     Return JSON only.
   `;
 
@@ -56,6 +88,7 @@ export const generateBookPlan = async (topic: string): Promise<BookPlan> => {
           title: { type: Type.STRING },
           subtitle: { type: Type.STRING },
           description: { type: Type.STRING },
+          authorName: { type: Type.STRING },
           keywords: { type: Type.ARRAY, items: { type: Type.STRING } },
           pages: {
             type: Type.ARRAY,
@@ -65,13 +98,14 @@ export const generateBookPlan = async (topic: string): Promise<BookPlan> => {
                 type: Type.OBJECT,
                 properties: {
                     title: { type: Type.STRING },
-                    description: { type: Type.STRING }
+                    description: { type: Type.STRING },
+                    saying: { type: Type.STRING }
                 },
-                required: ["title", "description"]
+                required: ["title", "description", "saying"]
             }
           }
         },
-        required: ["title", "subtitle", "description", "keywords", "pages"]
+        required: ["title", "subtitle", "description", "authorName", "keywords", "pages"]
       }
     }
   }));
@@ -82,9 +116,14 @@ export const generateBookPlan = async (topic: string): Promise<BookPlan> => {
       title: data.title || '',
       subtitle: data.subtitle || '',
       description: data.description || '',
+      authorName: data.authorName || 'KDP Creator',
       keywords: data.keywords || [],
     },
-    pages: (data.pages || []).map((p: any) => ({ title: p.title || '', prompt: p.description || '' }))
+    pages: (data.pages || []).map((p: any) => ({ 
+      title: p.title || '', 
+      prompt: p.description || '',
+      saying: p.saying || ''
+    }))
   };
 };
 
@@ -98,39 +137,52 @@ export const generateColoringPage = async (sceneDescription: string, aspectRatio
   const prompt = `
     KDP Interior Drawing: ${sceneDescription}.
     Style: Hand-drawn black and white line art coloring page. 
-    Instructions: High contrast, thick outlines, white background, no shading, no gray, no textures. 
-    Professional professional children's coloring book style.
+    Instructions: High contrast, thick outlines, white background, no shading. 
+    Professional children's coloring book style.
   `;
-
   const ai = getAI();
-  const response = await withRetry<GenerateContentResponse>(() => ai.models.generateContent({
+  const response = await withRetry(() => ai.models.generateContent({
     model: IMAGE_MODEL,
     contents: prompt,
     config: { imageConfig: { aspectRatio: aspectRatio as any } }
   }));
-
   const parts = response.candidates?.[0]?.content?.parts;
   if (parts) {
     for (const part of parts) {
       if (part.inlineData?.data) return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
     }
   }
-  throw new Error("No image data returned from AI.");
+  throw new Error("No image data returned.");
 };
 
-export const generateCoverImage = async (topic: string, title: string, aspectRatio: string = "3:4"): Promise<string> => {
-    const prompt = `Book cover for coloring book: ${topic}. Digital art, vivid colors, 3D render style, kid-friendly.`;
+export const generateCoverImage = async (topic: string, title: string, subtitle: string, author: string, aspectRatio: string = "3:4", isBack: boolean = false, referenceImageBase64?: string): Promise<string> => {
     const ai = getAI();
-    const response = await withRetry<GenerateContentResponse>(() => ai.models.generateContent({
+    let textPrompt = isBack 
+        ? `Back cover for a children's coloring book about "${topic}". Must include space for a barcode, an adorable character illustration, and a short blurb: "${subtitle}". Style must match a professional KDP cover.`
+        : `Front cover for a children's coloring book about "${topic}". Main Title: "${title}". Author: "${author}". Vibrant, high-detail illustration, commercial appeal.`;
+
+    if (referenceImageBase64) {
+      textPrompt += ` CRITICAL: Respect the structure, dimensions, and layout obligations of the provided reference template EXACTLY.`;
+    }
+
+    const contents = { parts: [{ text: textPrompt }] };
+    if (referenceImageBase64) {
+      const data = referenceImageBase64.split(',')[1];
+      const mimeType = referenceImageBase64.split(';')[0].split(':')[1];
+      contents.parts.unshift({ inlineData: { data, mimeType } });
+    }
+
+    const response = await withRetry(() => ai.models.generateContent({
       model: IMAGE_MODEL,
-      contents: prompt,
+      contents,
       config: { imageConfig: { aspectRatio: aspectRatio as any } }
     }));
+
     const parts = response.candidates?.[0]?.content?.parts;
     if (parts) {
       for (const part of parts) {
         if (part.inlineData?.data) return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
       }
     }
-    throw new Error("No cover image returned.");
+    throw new Error("Generation failed.");
 };
